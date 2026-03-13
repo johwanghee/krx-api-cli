@@ -13,6 +13,8 @@
 ## Current MVP Boundary
 - `config init`: write a local config template outside the repo.
 - `config set-auth-key`: store `AUTH_KEY` per environment in local config.
+- `install.sh`: install/update the binary from GitHub Releases.
+- `.github/workflows/prebuilt.yml`: build and publish prebuilt release assets.
 - Embed the KRX API catalog in the binary from local `docx` specs.
 - Expose API categories and functions as CLI commands so `--help` reveals the command surface.
 - Use a manifest-driven executor for REST APIs instead of raw URL-first UX.
@@ -34,6 +36,8 @@
 - Embedded manifest output: `data/krx_api_manifest.json`
 - CLI reference renderer: `tools/render_cli_reference.py`
 - Generated CLI reference: `docs/CLI_REFERENCE.md`
+- Release installer: `install.sh`
+- Prebuilt CI workflow: `.github/workflows/prebuilt.yml`
 
 ## Workflow Preference
 - Keep the repository self-describing for later context recovery.
@@ -42,5 +46,6 @@
 
 ## Verification
 - Preferred checks: `cargo fmt`, `cargo check`, `cargo run -- --help`
+- Installer checks: `bash -n install.sh`, `bash install.sh --help`
 - When API behavior changes, also verify one representative sample request and one config flow.
 - If verification cannot run, note the exact blocker in `STATE.md` and in the final response.

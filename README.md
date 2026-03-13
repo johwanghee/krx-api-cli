@@ -33,17 +33,66 @@
 
 ## 빠른 시작
 
-### 1. 빌드
+### 1. 바이너리 받기
 
 ```bash
-cargo build --release
+curl -fsSL https://raw.githubusercontent.com/johwanghee/krx-api-cli/main/install.sh | bash
 ```
+
+설치 스크립트는 다음을 자동으로 처리합니다.
+
+- 현재 OS와 아키텍처 감지
+- 최신 GitHub Release 확인
+- 대응되는 release asset 다운로드
+- 가능하면 `sha256sums.txt`로 checksum 검증
+- 이미 설치되어 있으면 버전 비교 후 자동 업데이트 또는 no-op
+- 기본 설치 경로 `~/.local/bin`
+
+이 방식은 GitHub Release가 실제로 발행되어 있어야 동작합니다.
+Release가 아직 없으면 아래 수동 설치나 소스 빌드를 사용하면 됩니다.
+
+업데이트 정책:
+
+- 스크립트를 다시 실행하면 설치 또는 업데이트를 자동으로 수행
+- 이미 같은 버전이면 다운로드 없이 종료
+- 더 낮은 버전을 설치하려면 `--allow-downgrade` 또는 `--force`
+- 설치 계획만 보고 싶으면 `--check`
+
+버전 고정이나 경로 변경도 가능합니다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/johwanghee/krx-api-cli/main/install.sh | \
+  bash -s -- --version v1.0.0 --install-dir ~/.local/bin
+```
+
+설치 계획 확인:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/johwanghee/krx-api-cli/main/install.sh | \
+  bash -s -- --check
+```
+
+수동 설치가 필요하면 GitHub Releases 또는 GitHub Actions artifacts에서 OS별 prebuilt 바이너리를
+직접 받아도 됩니다.
+
+제공 대상:
+
+- macOS x86_64: `krx-api-cli-macos-x86_64.tar.gz`
+- macOS arm64: `krx-api-cli-macos-arm64.tar.gz`
+- Linux x86_64: `krx-api-cli-linux-x86_64.tar.gz`
+- Windows x86_64: `krx-api-cli-windows-x86_64.zip`
+
+압축을 푼 뒤 실행 파일을 `PATH`에 두면 아래 예제를 그대로 사용할 수 있습니다.
+현재 디렉터리에서 바로 실행할 때만 OS에 따라 다음처럼 앞에 경로를 붙이면 됩니다.
+
+- macOS/Linux: `./krx-api-cli`
+- Windows: `.\krx-api-cli.exe`
 
 ### 2. 설정 파일 경로 확인 및 초기화
 
 ```bash
-./target/release/krx-api-cli config path
-./target/release/krx-api-cli config init
+krx-api-cli config path
+krx-api-cli config init
 ```
 
 config는 저장소 밖 OS 전용 경로에 생성됩니다.
@@ -60,8 +109,8 @@ config는 저장소 밖 OS 전용 경로에 생성됩니다.
 예시:
 
 ```bash
-./target/release/krx-api-cli config set-auth-key --profile sample --stdin
-./target/release/krx-api-cli config set-auth-key --profile real --stdin
+krx-api-cli config set-auth-key --profile sample --stdin
+krx-api-cli config set-auth-key --profile real --stdin
 ```
 
 환경변수 override:
@@ -81,32 +130,32 @@ config는 저장소 밖 OS 전용 경로에 생성됩니다.
 샘플 환경에서 KRX 시리즈 일별시세정보:
 
 ```bash
-./target/release/krx-api-cli index krx-dd-trd --bas-dd 20200414
+krx-api-cli index krx-dd-trd --bas-dd 20200414
 ```
 
 실환경에서 같은 API 호출:
 
 ```bash
-./target/release/krx-api-cli --env real index krx-dd-trd --bas-dd 20240102
+krx-api-cli --env real index krx-dd-trd --bas-dd 20240102
 ```
 
 xml 응답:
 
 ```bash
-./target/release/krx-api-cli --format xml index krx-dd-trd --bas-dd 20200414
+krx-api-cli --format xml index krx-dd-trd --bas-dd 20200414
 ```
 
 정렬/후처리 예시:
 
 ```bash
-./target/release/krx-api-cli --env real stock stk-bydd-trd --bas-dd 20260312 \
+krx-api-cli --env real stock stk-bydd-trd --bas-dd 20260312 \
   --sort-by market_cap --order desc --limit 10 --select name,symbol,market_cap
 ```
 
 필터 예시:
 
 ```bash
-./target/release/krx-api-cli --env real stock stk-bydd-trd --bas-dd 20260312 \
+krx-api-cli --env real stock stk-bydd-trd --bas-dd 20260312 \
   --filter change_rate:gte:20 --sort-by change_rate --order desc \
   --select name,symbol,change_rate,market_cap
 ```
@@ -183,27 +232,55 @@ list 형태의 JSON 응답에는 공통 후처리 옵션을 붙일 수 있습니
 최상위 카테고리:
 
 ```bash
-./target/release/krx-api-cli --help
+krx-api-cli --help
 ```
 
 특정 카테고리:
 
 ```bash
-./target/release/krx-api-cli stock --help
+krx-api-cli stock --help
 ```
 
 특정 API:
 
 ```bash
-./target/release/krx-api-cli stock stk-bydd-trd --help
+krx-api-cli stock stk-bydd-trd --help
 ```
 
 내장 카탈로그 요약/내보내기:
 
 ```bash
-./target/release/krx-api-cli catalog summary
-./target/release/krx-api-cli catalog export --compact
+krx-api-cli catalog summary
+krx-api-cli catalog export --compact
 ```
+
+## Prebuilt 빌드
+
+GitHub Actions는 다음 prebuilt 산출물을 만듭니다.
+
+- `macos-15-intel`에서 빌드한 `krx-api-cli-macos-x86_64.tar.gz`
+- `macos-15`에서 빌드한 `krx-api-cli-macos-arm64.tar.gz`
+- `ubuntu-22.04`에서 빌드한 `krx-api-cli-linux-x86_64.tar.gz`
+- `windows-2022`에서 빌드한 `krx-api-cli-windows-x86_64.zip`
+
+동작 방식:
+
+- `push`, `pull_request`, `workflow_dispatch` 때마다 전체 prebuilt 빌드를 수행합니다.
+- 각 빌드 산출물은 GitHub Actions artifact로 업로드됩니다.
+- `v*` 형식 태그를 push하면 같은 산출물과 `sha256sums.txt`를 GitHub Release 자산으로 업로드합니다.
+
+## 소스에서 직접 빌드하기
+
+prebuilt 바이너리 대신 로컬에서 직접 빌드하려면 아래를 사용합니다.
+
+```bash
+cargo build --release
+```
+
+빌드 결과:
+
+- macOS/Linux: `./target/release/krx-api-cli`
+- Windows: `.\target\release\krx-api-cli.exe`
 
 ## 재생성
 

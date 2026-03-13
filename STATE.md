@@ -35,6 +35,11 @@
   - `SPEC.md`
   - `AGENTS.md`
   - `STATE.md`
+- Added release/install surface aligned with `kis-trading-cli`:
+  - `.github/workflows/prebuilt.yml`
+  - `install.sh`
+  - install/update/manual install sections in `README.md`
+  - install guidance in `docs/LLM_GUIDE.md`
 - Added generator/renderer tools:
   - `tools/sync_krx_specs.py`
   - `tools/generate_manifest.py`
@@ -55,6 +60,10 @@
 - Config format: TOML
 - Config storage: OS-specific app config directory
 - Command surface source: generated manifest from local KRX `docx` specs
+- Distribution surface:
+  - GitHub Actions prebuilt artifacts for macOS/Linux/Windows
+  - GitHub Releases assets on `v*` tags
+  - `install.sh` for install/update/check planning
 - Documentation strategy:
   - `README.md` for people
   - `docs/LLM_GUIDE.md` for LLM/agent execution rules
@@ -82,6 +91,9 @@
 - `python3 tools/render_cli_reference.py`: passed
 - `python3 tools/sync_krx_specs.py`: passed, `service_count=31`, `updated=31`
 - `python3 tools/sync_krx_specs.py --missing-only`: passed, `service_count=31`, `skipped_existing=31`
+- `bash -n install.sh`: passed
+- `bash install.sh --help`: passed
+- `.github/workflows/prebuilt.yml`: file created and manually inspected; local YAML parser module was unavailable for additional parse validation
 - `cargo fmt -- --check`: passed
 - `cargo check`: passed
 - `cargo run -- --help`: passed
@@ -103,6 +115,7 @@
 ## Risks / Blockers
 
 - Sample and real access both depend on a valid `AUTH_KEY`; no credentials are stored in the repo for smoke tests.
+- `install.sh --check` and real install/update flow need a published GitHub Release to be exercised end-to-end.
 - `docx` parsing assumes the current KRX spec document structure stays stable.
 - The current executor is GET-only because the current local spec set is query-oriented.
 - There is no automated test suite yet; current verification is smoke-test based.

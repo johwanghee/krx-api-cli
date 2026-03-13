@@ -29,6 +29,8 @@ KRX Open API를 브라우저 샘플 페이지 없이 직접 호출할 수 있는
 - Rust binary crate 초기화
 - OS별 config 경로 사용
 - config template 생성
+- GitHub Releases용 설치 스크립트
+- GitHub Actions prebuilt build/release workflow
 - KRX 서비스 목록/명세 기반 API manifest 생성
 - 카테고리별 동적 CLI 도움말/명령 트리
 - 사람용 README와 LLM 전용 운영 문서 분리
@@ -40,5 +42,4 @@ KRX Open API를 브라우저 샘플 페이지 없이 직접 호출할 수 있는
 
 - 주문/쓰기 API
 - 자동 재시도와 rate-limit 백오프
-- 설치 스크립트와 prebuilt release 배포
 - 인증키 암호화 저장
