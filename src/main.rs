@@ -17,7 +17,8 @@ use serde_json::{json, Map, Value};
 use crate::api::{ApiRequest, ApiResponse, KrxClient, OutputFormat};
 use crate::cli::Environment;
 use crate::config::{
-    app_paths, redacted_config_value, resolve_profile, set_auth_key, write_config_template,
+    app_paths, key_status, redacted_config_value, resolve_profile, seal_config, set_auth_key,
+    write_config_template,
 };
 use crate::errors::{
     error_report_from_anyhow, error_report_from_clap, render_error_report, API_ERROR_EXIT_CODE,
@@ -362,11 +363,31 @@ fn config_command() -> Command {
                     .help("Overwrite an existing config file"),
             ),
         )
-        .subcommand(Command::new("path").about("Show config path"))
+        .subcommand(Command::new("path").about("Show config and key paths"))
         .subcommand(Command::new("show").about("Show redacted config"))
         .subcommand(
+            Command::new("seal")
+                .about("Encrypt plaintext AUTH_KEY values already stored in config")
+                .arg(
+                    Arg::new("profile")
+                        .long("profile")
+                        .value_parser(["sample", "real"])
+                        .help("Only seal a single profile"),
+                ),
+        )
+        .subcommand(
+            Command::new("key")
+                .about("Inspect local config encryption key state")
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(
+                    Command::new("status")
+                        .about("Show key status, plaintext secret status, and remediation hints"),
+                ),
+        )
+        .subcommand(
             Command::new("set-auth-key")
-                .about("Store AUTH_KEY in config")
+                .about("Encrypt and store AUTH_KEY in config")
                 .arg(
                     Arg::new("profile")
                         .long("profile")
@@ -431,6 +452,8 @@ fn handle_config(
                 &json!({
                     "config_path": paths.config_path,
                     "exists": paths.config_path.exists(),
+                    "key_path": paths.key_path,
+                    "key_exists": paths.key_path.exists(),
                 }),
                 compact,
             )
@@ -439,6 +462,23 @@ fn handle_config(
             let value = redacted_config_value(config_path.map(Path::new))?;
             print_json(&value, compact)
         }
+        Some(("seal", seal_matches)) => {
+            let environment = seal_matches
+                .get_one::<String>("profile")
+                .map(|value| environment_from_str(value))
+                .transpose()?;
+            let result = seal_config(config_path.map(Path::new), environment)?;
+            print_json(
+                &json!({
+                    "encrypted_fields": result.encrypted_fields,
+                    "profiles_touched": result.profiles_touched,
+                    "config_path": result.config_path,
+                    "key_path": result.key_path,
+                }),
+                compact,
+            )
+        }
+        Some(("key", key_matches)) => handle_config_key(key_matches, config_path, compact),
         Some(("set-auth-key", set_matches)) => {
             let environment = environment_from_str(
                 set_matches
@@ -456,17 +496,46 @@ fn handle_config(
                 _ => return Err(anyhow!("provide either --value or --stdin")),
             };
 
-            let written_path = set_auth_key(config_path.map(Path::new), environment, &value)?;
+            let result = set_auth_key(config_path.map(Path::new), environment, &value)?;
             print_json(
                 &json!({
                     "ok": true,
-                    "profile": environment,
-                    "config_path": written_path,
+                    "profile": result.profile.as_str(),
+                    "stored": "encrypted",
+                    "config_path": result.config_path,
+                    "key_path": result.key_path,
                 }),
                 compact,
             )
         }
         _ => Err(anyhow!("unknown config subcommand")),
+    }
+}
+
+fn handle_config_key(
+    matches: &ArgMatches,
+    config_path: Option<&str>,
+    compact: bool,
+) -> anyhow::Result<()> {
+    match matches.subcommand() {
+        Some(("status", _)) => {
+            let result = key_status(config_path.map(Path::new))?;
+            print_json(
+                &json!({
+                    "key_path": result.key_path,
+                    "key_exists": result.key_exists,
+                    "key_format": result.key_format,
+                    "previous_key_count": result.previous_key_count,
+                    "encrypted_field_count": result.encrypted_field_count,
+                    "plaintext_field_count": result.plaintext_field_count,
+                    "plaintext_fields": result.plaintext_fields,
+                    "seal_required": result.seal_required,
+                    "suggested_commands": result.suggested_commands,
+                }),
+                compact,
+            )
+        }
+        _ => Err(anyhow!("unknown config key subcommand")),
     }
 }
 
@@ -594,9 +663,11 @@ fn parse_filter_expr(expression: &str) -> anyhow::Result<FilterExpr> {
         "lt" => FilterOperator::Lt,
         "lte" => FilterOperator::Lte,
         "contains" => FilterOperator::Contains,
-        _ => return Err(anyhow!(
+        _ => {
+            return Err(anyhow!(
             "invalid --filter operator `{operator}`; use one of eq, ne, gt, gte, lt, lte, contains"
-        )),
+        ))
+        }
     };
 
     Ok(FilterExpr {

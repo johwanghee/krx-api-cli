@@ -3,7 +3,7 @@
 ## Snapshot
 
 - Date: 2026-03-13
-- Status: manifest-driven KRX CLI scaffold implemented
+- Status: manifest-driven KRX CLI implemented with encrypted local AUTH_KEY storage
 - Repository started as an almost-empty git repository with local `krx_docs` specs only.
 - Local git metadata was reinitialized after removing a mistakenly embedded sample `AUTH_KEY` from the work tree design.
 
@@ -28,6 +28,9 @@
   - LLM-friendly response field aliases (`name`, `symbol`, `market_cap`, `change_rate`, etc.)
   - structured JSON error reporting for `api_error` and `program_error`
   - error classification tuned for LLM remediation (`missing_auth_key`, `invalid_input`, `config_error`, `network_*`, `auth_or_permission`, `rate_limited`, etc.)
+  - local config encryption for `auth_key` using a per-user key file
+  - `config key status` and `config seal`
+  - plaintext config secret blocking with `program_error.category=plaintext_secret_detected`
 - Added project documents:
   - `README.md`
   - `docs/LLM_GUIDE.md`
@@ -73,6 +76,9 @@
   - no sample `AUTH_KEY` embedded in source, generated data, or docs
   - both `sample` and `real` require explicit `AUTH_KEY`
   - config values stay outside the repository
+  - config-stored `auth_key` values are encrypted at rest
+  - env var overrides remain plaintext and are not encrypted by the CLI
+  - plaintext `auth_key` values left in config are rejected until sealed
 - Current visible command model:
   - `config`
   - `catalog`
@@ -106,6 +112,15 @@
 - `cargo run -- --compact index krx-dd-trd --bas-dd 2024`: `program_error.category=invalid_input` confirmed before auth lookup
 - `KRX_SAMPLE_AUTH_KEY=BAD cargo run -- --compact index krx-dd-trd --bas-dd 20200414`: `api_error.category=auth_or_permission` confirmed
 - `cargo run -- config set-auth-key`: clap failure rendered as `program_error.category=invalid_input` with `suggested_commands`
+- `cargo test`: passed
+- `cargo run -- --config <temp>/config.toml --compact config key status`: passed
+- `cargo run -- --config <temp>/config.toml --compact config show`: now shows `encrypted/plaintext/absent` secret storage state
+- `cargo run -- --config <temp>/config.toml --compact config seal`: passed
+- `cargo run -- --config <temp>/config.toml --compact index krx-dd-trd --bas-dd 20200414` with plaintext config key: `program_error.category=plaintext_secret_detected`
+- `KRX_SAMPLE_AUTH_KEY=BAD cargo run -- --config <temp>/config.toml --compact index krx-dd-trd --bas-dd 20200414`: `api_error.category=auth_or_permission` confirmed with plaintext env override
+- `cargo run -- --compact config key status`: passed on the real local config after sealing
+- `cargo run -- --compact config seal`: passed on the real local config, `encrypted_fields=2`
+- `cargo run -- --env real --compact stock stk-bydd-trd --bas-dd 20260312 --limit 1 --sort-by market_cap --order desc --select name,symbol,market_cap`: passed after sealing the real local config
 - `cargo run -- --compact --env real stock stk-bydd-trd --bas-dd 20260312 --sort-by MKTCAP --order desc --limit 10 --select ISU_NM,ISU_CD,MKTCAP`: passed
 - `cargo run -- --compact --format xml --env real stock stk-bydd-trd --bas-dd 20260312 --limit 10`: fails as `program_error.category=invalid_input`
 - `cargo run -- --compact --env real stock stk-bydd-trd --bas-dd 20260312 --sort-by market_cap --order desc --limit 3 --select name,symbol,market_cap`: passed
@@ -115,6 +130,7 @@
 ## Risks / Blockers
 
 - Sample and real access both depend on a valid `AUTH_KEY`; no credentials are stored in the repo for smoke tests.
+- Losing the local config key file prevents decryption of config-stored `auth_key` values until they are re-entered.
 - `install.sh --check` and real install/update flow need a published GitHub Release to be exercised end-to-end.
 - `docx` parsing assumes the current KRX spec document structure stays stable.
 - The current executor is GET-only because the current local spec set is query-oriented.
@@ -123,7 +139,6 @@
 
 ## Next
 
-- Add unit tests around manifest loading, config resolution, and error classification.
-- Decide whether `AUTH_KEY` should remain plaintext in config or move to local encryption.
+- Add more unit tests around manifest loading and API response parsing.
 - Tighten manifest generation so future spec shape changes fail loudly.
 - Add richer validation for request parameters beyond `basDd`.
