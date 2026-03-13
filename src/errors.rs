@@ -455,6 +455,15 @@ fn classify_program_error(error: &AnyError, detail: &str) -> ProgramClassificati
         || detail.contains("stdin secret was empty")
         || detail.contains("unsupported format")
         || detail.contains("unsupported environment")
+        || detail.contains("unsupported sort order")
+        || detail.contains("invalid --filter expression")
+        || detail.contains("invalid --filter operator")
+        || detail.contains("select field list cannot be empty")
+        || detail.contains("limit must be greater than zero")
+        || detail.contains("response transforms require")
+        || detail.contains("unknown response field")
+        || detail.contains("unknown response field or alias")
+        || detail.contains("response field alias")
     {
         return ProgramClassification {
             category: "invalid_input",

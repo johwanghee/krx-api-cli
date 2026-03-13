@@ -24,6 +24,8 @@
   - sample/real environment selection
   - json/xml response format selection
   - manifest-driven GET executor
+  - client-side list transforms for JSON responses (`--filter`, `--sort-by`, `--order`, `--limit`, `--select`)
+  - LLM-friendly response field aliases (`name`, `symbol`, `market_cap`, `change_rate`, etc.)
   - structured JSON error reporting for `api_error` and `program_error`
   - error classification tuned for LLM remediation (`missing_auth_key`, `invalid_input`, `config_error`, `network_*`, `auth_or_permission`, `rate_limited`, etc.)
 - Added project documents:
@@ -92,6 +94,11 @@
 - `cargo run -- --compact index krx-dd-trd --bas-dd 2024`: `program_error.category=invalid_input` confirmed before auth lookup
 - `KRX_SAMPLE_AUTH_KEY=BAD cargo run -- --compact index krx-dd-trd --bas-dd 20200414`: `api_error.category=auth_or_permission` confirmed
 - `cargo run -- config set-auth-key`: clap failure rendered as `program_error.category=invalid_input` with `suggested_commands`
+- `cargo run -- --compact --env real stock stk-bydd-trd --bas-dd 20260312 --sort-by MKTCAP --order desc --limit 10 --select ISU_NM,ISU_CD,MKTCAP`: passed
+- `cargo run -- --compact --format xml --env real stock stk-bydd-trd --bas-dd 20260312 --limit 10`: fails as `program_error.category=invalid_input`
+- `cargo run -- --compact --env real stock stk-bydd-trd --bas-dd 20260312 --sort-by market_cap --order desc --limit 3 --select name,symbol,market_cap`: passed
+- `cargo run -- --compact --env real stock stk-bydd-trd --bas-dd 20260312 --filter change_rate:gte:20 --sort-by change_rate --order desc --limit 3 --select name,symbol,change_rate`: passed
+- `cargo run -- --compact --env real stock stk-bydd-trd --bas-dd 20260312 --filter name:contains:전자 --select name,symbol,market_cap`: passed
 
 ## Risks / Blockers
 

@@ -4,14 +4,15 @@ mod config;
 mod errors;
 mod manifest;
 
+use std::cmp::Ordering;
 use std::path::Path;
 use std::{io, io::Read};
 
 use anyhow::{anyhow, Context};
 use clap::error::ErrorKind;
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 
 use crate::api::{ApiRequest, ApiResponse, KrxClient, OutputFormat};
 use crate::cli::Environment;
@@ -61,6 +62,118 @@ enum RunFailure {
     Runtime(anyhow::Error),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FieldAlias {
+    alias: &'static str,
+    candidates: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+enum SortOrder {
+    #[default]
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FilterOperator {
+    Eq,
+    Ne,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Contains,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ResponseTransform {
+    filters: Vec<FilterExpr>,
+    sort_by: Option<String>,
+    sort_order: SortOrder,
+    limit: Option<usize>,
+    select: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedField {
+    output_key: String,
+    source_key: String,
+}
+
+#[derive(Debug, Clone)]
+struct FilterExpr {
+    field: String,
+    operator: FilterOperator,
+    value: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedFilter {
+    source_key: String,
+    operator: FilterOperator,
+    value: String,
+}
+
+const FIELD_ALIASES: &[FieldAlias] = &[
+    FieldAlias {
+        alias: "date",
+        candidates: &["BAS_DD"],
+    },
+    FieldAlias {
+        alias: "name",
+        candidates: &["ISU_NM", "IDX_NM"],
+    },
+    FieldAlias {
+        alias: "symbol",
+        candidates: &["ISU_CD"],
+    },
+    FieldAlias {
+        alias: "market",
+        candidates: &["MKT_NM", "IDX_CLSS"],
+    },
+    FieldAlias {
+        alias: "market_cap",
+        candidates: &["MKTCAP"],
+    },
+    FieldAlias {
+        alias: "close_price",
+        candidates: &["TDD_CLSPRC", "CLSPRC_IDX"],
+    },
+    FieldAlias {
+        alias: "open_price",
+        candidates: &["TDD_OPNPRC", "OPNPRC_IDX"],
+    },
+    FieldAlias {
+        alias: "high_price",
+        candidates: &["TDD_HGPRC", "HGPRC_IDX"],
+    },
+    FieldAlias {
+        alias: "low_price",
+        candidates: &["TDD_LWPRC", "LWPRC_IDX"],
+    },
+    FieldAlias {
+        alias: "change_price",
+        candidates: &["CMPPREVDD_PRC", "CMPPREVDD_IDX"],
+    },
+    FieldAlias {
+        alias: "change_rate",
+        candidates: &["FLUC_RT"],
+    },
+    FieldAlias {
+        alias: "volume",
+        candidates: &["ACC_TRDVOL"],
+    },
+    FieldAlias {
+        alias: "value",
+        candidates: &["ACC_TRDVAL"],
+    },
+    FieldAlias {
+        alias: "listed_shares",
+        candidates: &["LIST_SHRS"],
+    },
+];
+
 impl From<clap::Error> for RunFailure {
     fn from(value: clap::Error) -> Self {
         Self::Clap(value)
@@ -99,8 +212,10 @@ fn run() -> std::result::Result<(), RunFailure> {
 
             let format = output_format_from_matches(&matches)?;
             let request = build_manifest_request(entry, api_matches, format, env)?;
+            let transform = response_transform_from_matches(api_matches)?;
             let client = build_client(config_path.map(Path::new), env)?;
             let payload = client.send_request(request)?;
+            let payload = apply_response_transform(payload, &transform)?;
             Ok(print_response(&payload, compact)?)
         }
         None => Err(anyhow!("no command provided").into()),
@@ -135,11 +250,19 @@ fn build_cli(manifest: &ApiManifest) -> Command {
         for entry in manifest.category_entries(&category.id) {
             let mut api_command = Command::new(leak_string(entry.command_name.clone()))
                 .about(entry.display_name.clone())
-                .long_about(api_long_about(entry));
+                .long_about(api_long_about(entry))
+                .after_help(api_transform_after_help());
 
             for param in &entry.params {
                 api_command = api_command.arg(api_arg(param));
             }
+
+            api_command = api_command
+                .arg(transform_filter_arg())
+                .arg(transform_sort_by_arg())
+                .arg(transform_order_arg())
+                .arg(transform_limit_arg())
+                .arg(transform_select_arg());
 
             category_command = category_command.subcommand(api_command);
         }
@@ -184,6 +307,46 @@ fn global_compact_arg() -> Arg {
         .global(true)
         .action(ArgAction::SetTrue)
         .help("Print compact JSON")
+}
+
+fn transform_sort_by_arg() -> Arg {
+    Arg::new("sort_by")
+        .long("sort-by")
+        .value_name("FIELD")
+        .help("Sort list responses by a response field")
+}
+
+fn transform_filter_arg() -> Arg {
+    Arg::new("filter")
+        .long("filter")
+        .value_name("FIELD:OP:VALUE")
+        .action(ArgAction::Append)
+        .help("Filter rows; repeatable. Ops: eq, ne, gt, gte, lt, lte, contains")
+}
+
+fn transform_order_arg() -> Arg {
+    Arg::new("order")
+        .long("order")
+        .value_name("ORDER")
+        .default_value("asc")
+        .value_parser(["asc", "desc"])
+        .requires("sort_by")
+        .help("Sort order for --sort-by")
+}
+
+fn transform_limit_arg() -> Arg {
+    Arg::new("limit")
+        .long("limit")
+        .value_name("N")
+        .value_parser(value_parser!(usize))
+        .help("Keep only the first N rows after sorting")
+}
+
+fn transform_select_arg() -> Arg {
+    Arg::new("select")
+        .long("select")
+        .value_name("FIELDS")
+        .help("Comma-separated response fields to keep in each row")
 }
 
 fn config_command() -> Command {
@@ -360,6 +523,47 @@ fn build_manifest_request(
     })
 }
 
+fn response_transform_from_matches(matches: &ArgMatches) -> anyhow::Result<ResponseTransform> {
+    let filters = matches
+        .get_many::<String>("filter")
+        .map(|values| values.map(|value| parse_filter_expr(value)).collect())
+        .transpose()?
+        .unwrap_or_default();
+    let sort_by = matches.get_one::<String>("sort_by").cloned();
+    let sort_order = match matches.get_one::<String>("order").map(String::as_str) {
+        Some("asc") | None => SortOrder::Asc,
+        Some("desc") => SortOrder::Desc,
+        Some(other) => return Err(anyhow!("unsupported sort order `{other}`")),
+    };
+    let limit = matches.get_one::<usize>("limit").copied();
+    let select = matches.get_one::<String>("select").map(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    });
+
+    if matches.contains_id("select") && select.as_ref().is_some_and(Vec::is_empty) {
+        return Err(anyhow!(
+            "select field list cannot be empty; use comma-separated response fields"
+        ));
+    }
+
+    if limit == Some(0) {
+        return Err(anyhow!("limit must be greater than zero"));
+    }
+
+    Ok(ResponseTransform {
+        filters,
+        sort_by,
+        sort_order,
+        limit,
+        select,
+    })
+}
+
 fn validate_param_value(param: &ApiParam, value: &str) -> anyhow::Result<()> {
     if param.name == "basDd"
         && (value.len() != 8 || !value.chars().all(|character| character.is_ascii_digit()))
@@ -368,6 +572,348 @@ fn validate_param_value(param: &ApiParam, value: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_filter_expr(expression: &str) -> anyhow::Result<FilterExpr> {
+    let mut parts = expression.splitn(3, ':');
+    let field = parts.next().unwrap_or_default().trim();
+    let operator = parts.next().unwrap_or_default().trim();
+    let value = parts.next().unwrap_or_default().trim();
+
+    if field.is_empty() || operator.is_empty() || value.is_empty() {
+        return Err(anyhow!(
+            "invalid --filter expression `{expression}`; expected FIELD:OP:VALUE with OP in eq, ne, gt, gte, lt, lte, contains"
+        ));
+    }
+
+    let operator = match canonical_field_name(operator).as_str() {
+        "eq" => FilterOperator::Eq,
+        "ne" => FilterOperator::Ne,
+        "gt" => FilterOperator::Gt,
+        "gte" => FilterOperator::Gte,
+        "lt" => FilterOperator::Lt,
+        "lte" => FilterOperator::Lte,
+        "contains" => FilterOperator::Contains,
+        _ => return Err(anyhow!(
+            "invalid --filter operator `{operator}`; use one of eq, ne, gt, gte, lt, lte, contains"
+        )),
+    };
+
+    Ok(FilterExpr {
+        field: field.to_string(),
+        operator,
+        value: value.to_string(),
+    })
+}
+
+fn apply_response_transform(
+    payload: ApiResponse,
+    transform: &ResponseTransform,
+) -> anyhow::Result<ApiResponse> {
+    if !transform.is_active() {
+        return Ok(payload);
+    }
+
+    match payload {
+        ApiResponse::Json(value) => Ok(ApiResponse::Json(apply_json_transform(value, transform)?)),
+        ApiResponse::Xml(_) => Err(anyhow!(
+            "response transforms require JSON output; retry without `--format xml`"
+        )),
+    }
+}
+
+fn apply_json_transform(value: Value, transform: &ResponseTransform) -> anyhow::Result<Value> {
+    let mut object = match value {
+        Value::Object(object) => object,
+        _ => {
+            return Err(anyhow!(
+                "response transforms require a JSON object with an array block like `OutBlock_1`"
+            ));
+        }
+    };
+
+    let target_key = locate_transform_target(&object)?;
+    let rows = object
+        .get_mut(&target_key)
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow!("response field `{target_key}` is not an array"))?;
+
+    if !transform.filters.is_empty() {
+        filter_rows(rows, &transform.filters)?;
+    }
+
+    if let Some(sort_by) = &transform.sort_by {
+        sort_rows(rows, sort_by, transform.sort_order)?;
+    }
+
+    if let Some(limit) = transform.limit {
+        rows.truncate(limit);
+    }
+
+    if let Some(select) = &transform.select {
+        select_fields(rows, select)?;
+    }
+
+    Ok(Value::Object(object))
+}
+
+fn locate_transform_target(object: &Map<String, Value>) -> anyhow::Result<String> {
+    if object
+        .get("OutBlock_1")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty())
+    {
+        return Ok("OutBlock_1".to_string());
+    }
+
+    object
+        .iter()
+        .find(|(_, value)| {
+            value
+                .as_array()
+                .is_some_and(|rows| rows.iter().all(|row| row.is_object()))
+        })
+        .map(|(key, _)| key.clone())
+        .ok_or_else(|| {
+            anyhow!("response transforms require a JSON array block such as `OutBlock_1`")
+        })
+}
+
+fn sort_rows(rows: &mut [Value], field: &str, sort_order: SortOrder) -> anyhow::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let resolved = resolve_requested_field(rows, field, "--sort-by")?;
+
+    rows.sort_by(|left, right| compare_row_values(left, right, &resolved.source_key, sort_order));
+    Ok(())
+}
+
+fn filter_rows(rows: &mut Vec<Value>, filters: &[FilterExpr]) -> anyhow::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let resolved_filters = filters
+        .iter()
+        .map(|filter| {
+            Ok(ResolvedFilter {
+                source_key: resolve_requested_field(rows, &filter.field, "--filter")?.source_key,
+                operator: filter.operator,
+                value: filter.value.clone(),
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    rows.retain(|row| {
+        resolved_filters
+            .iter()
+            .all(|filter| row_matches_filter(row, filter))
+    });
+
+    Ok(())
+}
+
+fn select_fields(rows: &mut [Value], fields: &[String]) -> anyhow::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let resolved_fields = fields
+        .iter()
+        .map(|field| resolve_requested_field(rows, field, "--select"))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    for row in rows.iter_mut() {
+        let object = row
+            .as_object()
+            .ok_or_else(|| anyhow!("response transform expected object rows"))?;
+        let mut selected = Map::new();
+        for field in &resolved_fields {
+            if let Some(value) = object.get(&field.source_key) {
+                selected.insert(field.output_key.clone(), value.clone());
+            }
+        }
+        *row = Value::Object(selected);
+    }
+
+    Ok(())
+}
+
+fn resolve_requested_field(
+    rows: &[Value],
+    requested: &str,
+    option_name: &str,
+) -> anyhow::Result<ResolvedField> {
+    if rows.iter().any(|row| row_field(row, requested).is_some()) {
+        return Ok(ResolvedField {
+            output_key: requested.to_string(),
+            source_key: requested.to_string(),
+        });
+    }
+
+    if let Some(actual_field) = available_fields(rows)
+        .into_iter()
+        .find(|field| field.eq_ignore_ascii_case(requested))
+    {
+        return Ok(ResolvedField {
+            output_key: actual_field.clone(),
+            source_key: actual_field,
+        });
+    }
+
+    let normalized = canonical_field_name(requested);
+    if let Some(alias) = FIELD_ALIASES.iter().find(|alias| alias.alias == normalized) {
+        if let Some(source_key) = alias
+            .candidates
+            .iter()
+            .find(|candidate| rows.iter().any(|row| row_field(row, candidate).is_some()))
+        {
+            return Ok(ResolvedField {
+                output_key: alias.alias.to_string(),
+                source_key: (*source_key).to_string(),
+            });
+        }
+
+        return Err(anyhow!(
+            "response field alias `{requested}` is not available for {option_name}; available fields: {}; supported aliases for this response: {}",
+            available_fields(rows).join(", "),
+            available_aliases(rows).join(", ")
+        ));
+    }
+
+    Err(anyhow!(
+        "unknown response field or alias `{requested}` for {option_name}; available fields: {}; supported aliases: {}",
+        available_fields(rows).join(", "),
+        supported_alias_names().join(", ")
+    ))
+}
+
+fn compare_row_values(left: &Value, right: &Value, field: &str, sort_order: SortOrder) -> Ordering {
+    match (row_field(left, field), row_field(right, field)) {
+        (Some(left), Some(right)) => {
+            let ordering = compare_scalar_values(left, right);
+            match sort_order {
+                SortOrder::Asc => ordering,
+                SortOrder::Desc => ordering.reverse(),
+            }
+        }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn compare_scalar_values(left: &Value, right: &Value) -> Ordering {
+    match (value_as_number(left), value_as_number(right)) {
+        (Some(left), Some(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
+        _ => value_as_text(left).cmp(&value_as_text(right)),
+    }
+}
+
+fn row_matches_filter(row: &Value, filter: &ResolvedFilter) -> bool {
+    let Some(value) = row_field(row, &filter.source_key) else {
+        return false;
+    };
+
+    match filter.operator {
+        FilterOperator::Eq => compare_value_to_literal(value, &filter.value) == Ordering::Equal,
+        FilterOperator::Ne => compare_value_to_literal(value, &filter.value) != Ordering::Equal,
+        FilterOperator::Gt => compare_value_to_literal(value, &filter.value) == Ordering::Greater,
+        FilterOperator::Gte => {
+            let ordering = compare_value_to_literal(value, &filter.value);
+            ordering == Ordering::Greater || ordering == Ordering::Equal
+        }
+        FilterOperator::Lt => compare_value_to_literal(value, &filter.value) == Ordering::Less,
+        FilterOperator::Lte => {
+            let ordering = compare_value_to_literal(value, &filter.value);
+            ordering == Ordering::Less || ordering == Ordering::Equal
+        }
+        FilterOperator::Contains => {
+            normalized_text(&value_as_text(value)).contains(&normalized_text(&filter.value))
+        }
+    }
+}
+
+fn compare_value_to_literal(value: &Value, literal: &str) -> Ordering {
+    match (value_as_number(value), literal_as_number(literal)) {
+        (Some(left), Some(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
+        _ => normalized_text(&value_as_text(value)).cmp(&normalized_text(literal)),
+    }
+}
+
+fn value_as_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => {
+            let normalized = text.trim().replace(',', "");
+            if normalized.is_empty() {
+                None
+            } else {
+                normalized.parse::<f64>().ok()
+            }
+        }
+        _ => None,
+    }
+}
+
+fn literal_as_number(value: &str) -> Option<f64> {
+    let normalized = value.trim().replace(',', "");
+    if normalized.is_empty() {
+        None
+    } else {
+        normalized.parse::<f64>().ok()
+    }
+}
+
+fn value_as_text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(_) | Value::Object(_) => value.to_string(),
+    }
+}
+
+fn row_field<'a>(row: &'a Value, field: &str) -> Option<&'a Value> {
+    row.as_object().and_then(|object| object.get(field))
+}
+
+fn available_fields(rows: &[Value]) -> Vec<String> {
+    let mut fields = rows
+        .iter()
+        .find_map(|row| row.as_object())
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    fields.sort();
+    fields
+}
+
+fn available_aliases(rows: &[Value]) -> Vec<&'static str> {
+    FIELD_ALIASES
+        .iter()
+        .filter(|alias| {
+            alias
+                .candidates
+                .iter()
+                .any(|candidate| rows.iter().any(|row| row_field(row, candidate).is_some()))
+        })
+        .map(|alias| alias.alias)
+        .collect()
+}
+
+fn supported_alias_names() -> Vec<&'static str> {
+    FIELD_ALIASES.iter().map(|alias| alias.alias).collect()
+}
+
+fn canonical_field_name(field: &str) -> String {
+    field.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+fn normalized_text(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 fn read_stdin_secret() -> anyhow::Result<String> {
@@ -431,6 +977,13 @@ fn print_json<T: Serialize>(payload: &T, compact: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn api_transform_after_help() -> String {
+    format!(
+        "Client-side transforms:\n  --filter <FIELD:OP:VALUE>  Filter rows; repeatable. Example: change_rate:gte:10, name:contains:전자\n  --sort-by <FIELD>          Sort JSON list rows by a response field\n  --order <asc|desc>         Sort order for --sort-by\n  --limit <N>                Keep only the first N rows after sorting\n  --select <A,B,...>         Keep only the listed response fields in each row\n\nPreferred aliases:\n  {}",
+        supported_alias_names().join(", ")
+    )
+}
+
 fn top_level_after_help(manifest: &ApiManifest) -> String {
     let mut lines = Vec::new();
     lines.push("Top-level groups:".to_string());
@@ -461,4 +1014,13 @@ fn api_long_about(entry: &ApiEntry) -> String {
 
 fn leak_string(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
+}
+
+impl ResponseTransform {
+    fn is_active(&self) -> bool {
+        !self.filters.is_empty()
+            || self.sort_by.is_some()
+            || self.limit.is_some()
+            || self.select.is_some()
+    }
 }
