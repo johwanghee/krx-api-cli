@@ -12,7 +12,9 @@
 
 ## Current MVP Boundary
 - `config init`: write a local config template outside the repo.
-- `config set-auth-key`: store `AUTH_KEY` per environment in local config.
+- `config set-auth-key`: encrypt and store `AUTH_KEY` per environment in local config.
+- `config key status`: inspect local encryption key state and plaintext-secret remediation status.
+- `config seal`: encrypt legacy plaintext `auth_key` values already present in config.
 - `install.sh`: install/update the binary from GitHub Releases.
 - `.github/workflows/prebuilt.yml`: build and publish prebuilt release assets.
 - Embed the KRX API catalog in the binary from local `docx` specs.
@@ -23,6 +25,8 @@
 ## Engineering Rules
 - Do not commit real `AUTH_KEY` values or any credential-like value.
 - Do not embed public sample `AUTH_KEY` values in code, generated data, or docs.
+- Env var overrides may remain plaintext at runtime, but config-stored `auth_key` values must be encrypted.
+- API commands should refuse plaintext config secrets and return actionable remediation hints.
 - Keep output JSON-first so the CLI composes well with shell tooling and agents.
 - Keep config in OS-specific app directories, not in the repository.
 - Favor `reqwest` with `rustls` to avoid platform-specific OpenSSL packaging issues.
@@ -47,5 +51,5 @@
 ## Verification
 - Preferred checks: `cargo fmt`, `cargo check`, `cargo run -- --help`
 - Installer checks: `bash -n install.sh`, `bash install.sh --help`
-- When API behavior changes, also verify one representative sample request and one config flow.
+- When API behavior changes, also verify one representative sample request and one encrypted-config flow.
 - If verification cannot run, note the exact blocker in `STATE.md` and in the final response.

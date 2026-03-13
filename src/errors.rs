@@ -5,6 +5,8 @@ use reqwest::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::config::PlaintextSecretError;
+
 pub const PROGRAM_ERROR_EXIT_CODE: i32 = 2;
 pub const API_ERROR_EXIT_CODE: i32 = 3;
 const RESPONSE_EXCERPT_LIMIT: usize = 1_000;
@@ -60,6 +62,8 @@ pub struct ProgramErrorPayload {
     pub category: &'static str,
     pub retryable: bool,
     pub detail: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub plaintext_secrets: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub suggested_commands: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -183,6 +187,16 @@ pub fn error_report_from_anyhow(error: &AnyError) -> ErrorEnvelope {
         return api_error_report(api_error, error.chain().map(ToString::to_string).collect());
     }
 
+    if let Some(plaintext_error) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<PlaintextSecretError>())
+    {
+        return plaintext_secret_report(
+            plaintext_error,
+            error.chain().map(ToString::to_string).collect(),
+        );
+    }
+
     let detail = error.to_string();
     let classification = classify_program_error(error, &detail);
     ErrorEnvelope {
@@ -200,6 +214,7 @@ pub fn error_report_from_anyhow(error: &AnyError) -> ErrorEnvelope {
             category: classification.category,
             retryable: classification.retryable,
             detail,
+            plaintext_secrets: Vec::new(),
             suggested_commands: classification.suggested_commands,
             suggested_env_vars: classification.suggested_env_vars,
         }),
@@ -238,6 +253,7 @@ pub fn error_report_from_clap(error: &clap::Error) -> ErrorEnvelope {
             category: "invalid_input",
             retryable: false,
             detail,
+            plaintext_secrets: Vec::new(),
             suggested_commands: if is_help_or_version {
                 Vec::new()
             } else {
@@ -249,6 +265,41 @@ pub fn error_report_from_clap(error: &clap::Error) -> ErrorEnvelope {
             suggested_env_vars: Vec::new(),
         }),
         causes: vec![error.kind().to_string()],
+    }
+}
+
+fn plaintext_secret_report(
+    plaintext_error: &PlaintextSecretError,
+    causes: Vec<String>,
+) -> ErrorEnvelope {
+    let suggested_commands = vec![
+        "krx-api-cli config key status --compact".to_string(),
+        "krx-api-cli config seal".to_string(),
+    ];
+
+    ErrorEnvelope {
+        ok: false,
+        error_type: "program_error",
+        exit_code: PROGRAM_ERROR_EXIT_CODE,
+        message: plaintext_error.to_string(),
+        llm_hint: LlmHint {
+            summary: format!(
+                "Sensitive config values are still stored in plaintext in {}.",
+                plaintext_error.config_path.display()
+            ),
+            retryable: false,
+            next_action: "Run `krx-api-cli config key status --compact` to inspect plaintext fields, then run `krx-api-cli config seal` or `krx-api-cli config set-auth-key ...` to encrypt them.".to_string(),
+        },
+        api_error: None,
+        program_error: Some(ProgramErrorPayload {
+            category: "plaintext_secret_detected",
+            retryable: false,
+            detail: plaintext_error.to_string(),
+            plaintext_secrets: plaintext_error.plaintext_fields.clone(),
+            suggested_commands,
+            suggested_env_vars: Vec::new(),
+        }),
+        causes,
     }
 }
 
@@ -481,6 +532,18 @@ fn classify_program_error(error: &AnyError, detail: &str) -> ProgramClassificati
         || detail.contains("failed to parse config file")
         || detail.contains("failed to write config")
         || detail.contains("config already exists")
+        || detail.contains("config file does not exist")
+        || detail.contains("failed to read config key file")
+        || detail.contains("failed to parse config key file")
+        || detail.contains("failed to write config encryption key")
+        || detail.contains("failed to decrypt")
+        || detail.contains("failed to encrypt")
+        || detail.contains("config encryption key")
+        || detail.contains("encrypted config")
+        || detail.contains("failed to create key directory")
+        || detail.contains("invalid config key length")
+        || detail.contains("unsupported config key file version")
+        || detail.contains("failed to apply restrictive permissions")
     {
         return ProgramClassification {
             category: "config_error",
@@ -547,6 +610,10 @@ fn program_summary(category: &str, detail: &str) -> String {
         "missing_auth_key" => {
             "The CLI could not find an AUTH_KEY for the selected environment.".to_string()
         }
+        "plaintext_secret_detected" => {
+            "The CLI found plaintext AUTH_KEY values in the local config and refused to use them."
+                .to_string()
+        }
         "invalid_input" => {
             "The CLI arguments or parameter values did not match the command requirements."
                 .to_string()
@@ -569,4 +636,51 @@ fn response_excerpt(response_text: &str) -> String {
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn plaintext_secret_error_is_structured_for_llm_remediation() {
+        let report = error_report_from_anyhow(&AnyError::new(PlaintextSecretError {
+            config_path: PathBuf::from("/tmp/config.toml"),
+            plaintext_fields: vec![
+                "profiles.sample.auth_key".to_string(),
+                "profiles.real.auth_key".to_string(),
+            ],
+        }));
+
+        assert_eq!(report.error_type, "program_error");
+        assert_eq!(
+            report
+                .program_error
+                .as_ref()
+                .map(|payload| payload.category),
+            Some("plaintext_secret_detected")
+        );
+        assert_eq!(
+            report
+                .program_error
+                .as_ref()
+                .map(|payload| payload.plaintext_secrets.len()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn invalid_input_keeps_plaintext_secret_list_empty() {
+        let report = error_report_from_anyhow(&anyhow!("invalid --filter expression `broken`"));
+        assert_eq!(
+            report
+                .program_error
+                .as_ref()
+                .map(|payload| payload.plaintext_secrets.is_empty()),
+            Some(true)
+        );
+    }
 }

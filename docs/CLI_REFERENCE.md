@@ -9,7 +9,7 @@
 
 ## Top-level commands
 
-- `config`: local config file path/template management
+- `config`: local config, encrypted AUTH_KEY, and key-state management
 - `catalog`: embedded manifest summary/export
 - `index`: KRX OPEN API의 지수 서비스를 제공합니다. (5 APIs)
 - `stock`: KRX OPEN API의 주식 서비스를 제공합니다. (8 APIs)
