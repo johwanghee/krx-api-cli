@@ -96,6 +96,21 @@ xml 응답:
 ./target/release/krx-api-cli --format xml index krx-dd-trd --bas-dd 20200414
 ```
 
+정렬/후처리 예시:
+
+```bash
+./target/release/krx-api-cli --env real stock stk-bydd-trd --bas-dd 20260312 \
+  --sort-by market_cap --order desc --limit 10 --select name,symbol,market_cap
+```
+
+필터 예시:
+
+```bash
+./target/release/krx-api-cli --env real stock stk-bydd-trd --bas-dd 20260312 \
+  --filter change_rate:gte:20 --sort-by change_rate --order desc \
+  --select name,symbol,change_rate,market_cap
+```
+
 ## 오류 출력
 
 실패 시 stdout 대신 stderr로 구조화된 JSON envelope를 출력합니다.
@@ -122,6 +137,46 @@ xml 응답:
 
 - `2`: `program_error`
 - `3`: `api_error`
+
+## 응답 후처리
+
+list 형태의 JSON 응답에는 공통 후처리 옵션을 붙일 수 있습니다.
+
+- `--sort-by <FIELD>`
+- `--order <asc|desc>`
+- `--limit <N>`
+- `--select <A,B,...>`
+- `--filter <FIELD:OP:VALUE>`
+
+이 기능은 KRX 서버 정렬이 아니라 CLI의 client-side 후처리입니다.
+현재는 JSON array block, 보통 `OutBlock_1`에 적용됩니다.
+
+지원 연산자:
+
+- `eq`
+- `ne`
+- `gt`
+- `gte`
+- `lt`
+- `lte`
+- `contains`
+
+권장 alias:
+
+- `date`
+- `name`
+- `symbol`
+- `market`
+- `market_cap`
+- `close_price`
+- `open_price`
+- `high_price`
+- `low_price`
+- `change_price`
+- `change_rate`
+- `volume`
+- `value`
+- `listed_shares`
 
 ## 명령 탐색
 

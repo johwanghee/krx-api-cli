@@ -36,6 +36,50 @@ krx-api-cli catalog <subcommand>
 - `--compact`
   - JSON 출력을 한 줄로 압축합니다.
 
+## 공통 후처리 옵션
+
+API 서브커맨드에는 다음 client-side 후처리 옵션을 붙일 수 있습니다.
+
+- `--filter <FIELD:OP:VALUE>`
+- `--sort-by <FIELD>`
+- `--order <asc|desc>`
+- `--limit <N>`
+- `--select <A,B,...>`
+
+규칙:
+
+- 이 옵션들은 KRX 서버 파라미터가 아니라 CLI 후처리입니다.
+- JSON 응답에서만 동작합니다.
+- 기본 대상은 `OutBlock_1` 같은 list block입니다.
+- 존재하지 않는 필드를 지정하면 `program_error.category=invalid_input`입니다.
+
+`--filter` 연산자:
+
+- `eq`
+- `ne`
+- `gt`
+- `gte`
+- `lt`
+- `lte`
+- `contains`
+
+우선 사용할 alias:
+
+- `date`
+- `name`
+- `symbol`
+- `market`
+- `market_cap`
+- `close_price`
+- `open_price`
+- `high_price`
+- `low_price`
+- `change_price`
+- `change_rate`
+- `volume`
+- `value`
+- `listed_shares`
+
 ## 설정 규칙
 
 - `sample` 환경도 `real` 환경과 마찬가지로 `AUTH_KEY`를 명시해야 합니다.
@@ -101,6 +145,19 @@ krx-api-cli catalog <subcommand>
 - 유가증권 일별매매정보: `krx-api-cli stock stk-bydd-trd`
 - 유가증권 종목기본정보: `krx-api-cli stock stk-isu-base-info`
 - 코스닥 일별매매정보: `krx-api-cli stock ksq-bydd-trd`
+
+예시:
+
+```bash
+krx-api-cli --env real stock stk-bydd-trd --bas-dd 20260312 \
+  --sort-by market_cap --order desc --limit 10 --select name,symbol,market_cap
+```
+
+```bash
+krx-api-cli --env real stock stk-bydd-trd --bas-dd 20260312 \
+  --filter change_rate:gte:20 --sort-by change_rate --order desc \
+  --select name,symbol,change_rate,market_cap
+```
 
 ## 파라미터 규칙
 
