@@ -195,6 +195,7 @@ fn run() -> std::result::Result<(), RunFailure> {
     let compact = matches.get_flag("compact");
 
     match matches.subcommand() {
+        Some(("doctor", _)) => Ok(handle_doctor(manifest, config_path, env, compact)?),
         Some(("config", sub_matches)) => Ok(handle_config(sub_matches, config_path, compact)?),
         Some(("catalog", sub_matches)) => Ok(handle_catalog(manifest, sub_matches, compact)?),
         Some((category_name, category_matches)) => {
@@ -238,6 +239,7 @@ fn build_cli(manifest: &ApiManifest) -> Command {
         .arg(global_config_arg())
         .arg(global_output_format_arg())
         .arg(global_compact_arg())
+        .subcommand(doctor_command())
         .subcommand(config_command())
         .subcommand(catalog_command());
 
@@ -412,6 +414,12 @@ fn config_command() -> Command {
         )
 }
 
+fn doctor_command() -> Command {
+    Command::new("doctor").about(
+        "Inspect local CLI readiness, config encryption state, and selected profile resolution",
+    )
+}
+
 fn catalog_command() -> Command {
     Command::new("catalog")
         .about("Inspect the embedded API catalog")
@@ -557,6 +565,187 @@ fn handle_catalog(
         Some(("export", _)) => print_json(manifest, compact),
         _ => Err(anyhow!("unknown catalog subcommand")),
     }
+}
+
+fn handle_doctor(
+    manifest: &ApiManifest,
+    config_path: Option<&str>,
+    environment: Environment,
+    compact: bool,
+) -> anyhow::Result<()> {
+    let config_snapshot = redacted_config_value(config_path.map(Path::new))?;
+    let key_state = key_status(config_path.map(Path::new))?;
+    let config_exists = config_snapshot
+        .get("exists")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let encrypted_field_count = config_snapshot
+        .get("encrypted_field_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let selected_profile = config_snapshot
+        .get("profiles")
+        .and_then(|profiles| profiles.get(environment.as_str()))
+        .unwrap_or(&Value::Null);
+    let auth_storage = selected_profile
+        .get("auth_key")
+        .and_then(|value| value.get("storage"))
+        .and_then(Value::as_str)
+        .unwrap_or("absent");
+    let has_profile_base_url = selected_profile
+        .get("base_url")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_config_user_agent = config_snapshot
+        .get("user_agent")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+
+    let scoped_auth_env = env_var_is_set(&scoped_env_name(environment, "AUTH_KEY"));
+    let global_auth_env = env_var_is_set("KRX_AUTH_KEY");
+    let auth_key_source = if scoped_auth_env {
+        "env_scoped"
+    } else if global_auth_env {
+        "env_global"
+    } else {
+        match auth_storage {
+            "encrypted" => "config_encrypted",
+            "plaintext" => "config_plaintext",
+            _ => "missing",
+        }
+    };
+
+    let base_url_source = if env_var_is_set(&scoped_env_name(environment, "BASE_URL")) {
+        "env_scoped"
+    } else if env_var_is_set("KRX_BASE_URL") {
+        "env_global"
+    } else if has_profile_base_url {
+        "config"
+    } else {
+        "default"
+    };
+
+    let user_agent_source = if env_var_is_set("KRX_USER_AGENT") {
+        "env_global"
+    } else if has_config_user_agent {
+        "config"
+    } else {
+        "default"
+    };
+
+    let auth_key_ready = !key_state.seal_required
+        && matches!(
+            auth_key_source,
+            "env_scoped" | "env_global" | "config_encrypted"
+        );
+
+    let checks = vec![
+        json!({
+            "name": "config_file",
+            "status": if config_exists { "ok" } else { "warn" },
+            "detail": if config_exists {
+                "Config file exists.".to_string()
+            } else {
+                "Config file does not exist. Env-only mode is still possible, but config-based AUTH_KEY storage is unavailable until `krx-api-cli config init`.".to_string()
+            },
+        }),
+        json!({
+            "name": "key_file",
+            "status": if key_state.key_exists {
+                "ok"
+            } else if encrypted_field_count > 0 {
+                "error"
+            } else {
+                "warn"
+            },
+            "detail": if key_state.key_exists {
+                format!("Config encryption key exists at {}.", key_state.key_path.display())
+            } else if encrypted_field_count > 0 {
+                format!("Encrypted config fields exist but the key file is missing at {}.", key_state.key_path.display())
+            } else {
+                format!("No config encryption key exists yet at {}. This is expected until an AUTH_KEY is stored in config.", key_state.key_path.display())
+            },
+        }),
+        json!({
+            "name": "plaintext_config",
+            "status": if key_state.plaintext_field_count == 0 { "ok" } else { "error" },
+            "detail": if key_state.plaintext_field_count == 0 {
+                "No plaintext auth_key values were found in config.".to_string()
+            } else {
+                format!(
+                    "Plaintext auth_key values remain in config: {}. Run `krx-api-cli config seal`.",
+                    key_state.plaintext_fields.join(", ")
+                )
+            },
+        }),
+        json!({
+            "name": "selected_auth_key",
+            "status": if auth_key_ready { "ok" } else { "error" },
+            "detail": if key_state.seal_required {
+                "Plaintext config values block API commands until they are sealed.".to_string()
+            } else if auth_key_ready {
+                format!("AUTH_KEY is ready for the selected environment via {auth_key_source}.")
+            } else {
+                format!("No AUTH_KEY is available for the selected environment. Expected env vars: {}, KRX_AUTH_KEY.", scoped_env_name(environment, "AUTH_KEY"))
+            },
+        }),
+    ];
+
+    let has_error = checks
+        .iter()
+        .any(|check| check.get("status").and_then(Value::as_str) == Some("error"));
+    let summary = if key_state.seal_required {
+        "Plaintext config secrets must be sealed before API commands will run."
+    } else if auth_key_ready {
+        "Local CLI configuration looks ready for the selected environment."
+    } else {
+        "AUTH_KEY is not ready for the selected environment."
+    };
+
+    print_json(
+        &json!({
+            "ok": !has_error,
+            "version": env!("CARGO_PKG_VERSION"),
+            "selected_environment": environment.as_str(),
+            "catalog": {
+                "category_count": manifest.category_count,
+                "api_count": manifest.api_count,
+            },
+            "config": config_snapshot,
+            "key_status": {
+                "key_path": key_state.key_path,
+                "key_exists": key_state.key_exists,
+                "key_format": key_state.key_format,
+                "previous_key_count": key_state.previous_key_count,
+                "encrypted_field_count": key_state.encrypted_field_count,
+                "plaintext_field_count": key_state.plaintext_field_count,
+                "plaintext_fields": key_state.plaintext_fields,
+                "seal_required": key_state.seal_required,
+                "suggested_commands": key_state.suggested_commands,
+            },
+            "env_overrides": {
+                "sample_auth_key": env_var_is_set("KRX_SAMPLE_AUTH_KEY"),
+                "real_auth_key": env_var_is_set("KRX_REAL_AUTH_KEY"),
+                "global_auth_key": env_var_is_set("KRX_AUTH_KEY"),
+                "sample_base_url": env_var_is_set("KRX_SAMPLE_BASE_URL"),
+                "real_base_url": env_var_is_set("KRX_REAL_BASE_URL"),
+                "global_base_url": env_var_is_set("KRX_BASE_URL"),
+                "user_agent": env_var_is_set("KRX_USER_AGENT"),
+            },
+            "selected_profile": {
+                "auth_key_source": auth_key_source,
+                "auth_key_ready": auth_key_ready,
+                "base_url_source": base_url_source,
+                "user_agent_source": user_agent_source,
+            },
+            "checks": checks,
+            "summary": {
+                "status": if has_error { "error" } else { "ok" },
+                "message": summary,
+            }
+        }),
+        compact,
+    )
 }
 
 fn build_client(config_path: Option<&Path>, env: Environment) -> anyhow::Result<KrxClient> {
@@ -1026,6 +1215,16 @@ fn environment_from_str(value: &str) -> anyhow::Result<Environment> {
     }
 }
 
+fn env_var_is_set(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn scoped_env_name(environment: Environment, name: &str) -> String {
+    format!("KRX_{}_{}", environment.as_str().to_uppercase(), name)
+}
+
 fn print_response(payload: &ApiResponse, compact: bool) -> anyhow::Result<()> {
     match payload {
         ApiResponse::Json(value) => print_json(value, compact),
@@ -1058,6 +1257,7 @@ fn api_transform_after_help() -> String {
 fn top_level_after_help(manifest: &ApiManifest) -> String {
     let mut lines = Vec::new();
     lines.push("Top-level groups:".to_string());
+    lines.push("  doctor   Local readiness and config diagnostics".to_string());
     lines.push("  config   Local config management".to_string());
     lines.push("  catalog  Embedded manifest summary/export".to_string());
     for category in &manifest.categories {

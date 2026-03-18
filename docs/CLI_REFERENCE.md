@@ -9,6 +9,7 @@
 
 ## Top-level commands
 
+- `doctor`: local readiness and config diagnostics
 - `config`: local config, encrypted AUTH_KEY, and key-state management
 - `catalog`: embedded manifest summary/export
 - `index`: KRX OPEN API의 지수 서비스를 제공합니다. (5 APIs)

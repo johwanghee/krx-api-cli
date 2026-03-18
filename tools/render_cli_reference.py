@@ -39,6 +39,7 @@ def render_reference(manifest: dict) -> str:
     lines.append("")
     lines.append("## Top-level commands")
     lines.append("")
+    lines.append("- `doctor`: local readiness and config diagnostics")
     lines.append("- `config`: local config, encrypted AUTH_KEY, and key-state management")
     lines.append("- `catalog`: embedded manifest summary/export")
     for category in manifest["categories"]:

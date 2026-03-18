@@ -11,6 +11,7 @@
 - When behavior differs between portal HTML, sample pages, and `docx` specs, record the discrepancy in `STATE.md` before changing code.
 
 ## Current MVP Boundary
+- `doctor`: show local readiness, config encryption state, and selected profile diagnostics.
 - `config init`: write a local config template outside the repo.
 - `config set-auth-key`: encrypt and store `AUTH_KEY` per environment in local config.
 - `config key status`: inspect local encryption key state and plaintext-secret remediation status.

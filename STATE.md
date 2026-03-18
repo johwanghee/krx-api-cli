@@ -21,6 +21,7 @@
 - Added Rust crate with:
   - dynamic CLI command tree from embedded manifest
   - `config`, `catalog`, and category/API subcommands
+  - `doctor` top-level diagnostics for local readiness, env override presence, and config encryption state
   - sample/real environment selection
   - json/xml response format selection
   - manifest-driven GET executor
@@ -120,6 +121,7 @@
 - `KRX_SAMPLE_AUTH_KEY=BAD cargo run -- --config <temp>/config.toml --compact index krx-dd-trd --bas-dd 20200414`: `api_error.category=auth_or_permission` confirmed with plaintext env override
 - `cargo run -- --compact config key status`: passed on the real local config after sealing
 - `cargo run -- --compact config seal`: passed on the real local config, `encrypted_fields=2`
+- `cargo run -- --compact doctor`: passed, returns `ok=true` with local readiness summary
 - `cargo run -- --env real --compact stock stk-bydd-trd --bas-dd 20260312 --limit 1 --sort-by market_cap --order desc --select name,symbol,market_cap`: passed after sealing the real local config
 - `cargo run -- --compact --env real stock stk-bydd-trd --bas-dd 20260312 --sort-by MKTCAP --order desc --limit 10 --select ISU_NM,ISU_CD,MKTCAP`: passed
 - `cargo run -- --compact --format xml --env real stock stk-bydd-trd --bas-dd 20260312 --limit 10`: fails as `program_error.category=invalid_input`
