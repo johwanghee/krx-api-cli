@@ -6,7 +6,7 @@ mod manifest;
 
 use std::cmp::Ordering;
 use std::path::Path;
-use std::{io, io::Read};
+use std::{io, io::IsTerminal, io::Read};
 
 use anyhow::{anyhow, Context};
 use clap::error::ErrorKind;
@@ -409,7 +409,7 @@ fn config_command() -> Command {
                         .long("stdin")
                         .action(ArgAction::SetTrue)
                         .conflicts_with("value")
-                        .help("Read AUTH_KEY from stdin"),
+                        .help("Read AUTH_KEY from stdin; in a terminal, prompts for one hidden line"),
                 ),
         )
 }
@@ -1177,12 +1177,24 @@ fn normalized_text(value: &str) -> String {
 }
 
 fn read_stdin_secret() -> anyhow::Result<String> {
+    if io::stdin().is_terminal() {
+        let secret = rpassword::prompt_password(
+            "KRX AUTH_KEY를 입력하세요 (입력 내용은 표시되지 않습니다): ",
+        )
+            .context("failed to read secret from terminal")?;
+        return finalize_secret_input(secret);
+    }
+
     let mut buffer = String::new();
     io::stdin()
         .read_to_string(&mut buffer)
         .context("failed to read secret from stdin")?;
 
-    let trimmed = buffer.trim().to_string();
+    finalize_secret_input(buffer)
+}
+
+fn finalize_secret_input(raw: String) -> anyhow::Result<String> {
+    let trimmed = raw.trim().to_string();
     if trimmed.is_empty() {
         return Err(anyhow!("stdin secret was empty"));
     }

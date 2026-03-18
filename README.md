@@ -119,6 +119,15 @@ krx-api-cli config key status
 krx-api-cli config seal
 ```
 
+터미널에서 `--stdin`을 쓰면
+`KRX AUTH_KEY를 입력하세요 (입력 내용은 표시되지 않습니다):`
+프롬프트가 뜨고 한 줄만 입력받습니다.
+파이프로 넘기는 것도 계속 지원합니다.
+
+```bash
+printf '%s' 'YOUR_AUTH_KEY' | krx-api-cli config set-auth-key --profile real --stdin
+```
+
 환경변수 override:
 
 - `KRX_ENV`

@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-- Date: 2026-03-13
+- Date: 2026-03-18
 - Status: manifest-driven KRX CLI implemented with encrypted local AUTH_KEY storage
 - Repository started as an almost-empty git repository with local `krx_docs` specs only.
 - Local git metadata was reinitialized after removing a mistakenly embedded sample `AUTH_KEY` from the work tree design.
@@ -122,6 +122,8 @@
 - `cargo run -- --compact config key status`: passed on the real local config after sealing
 - `cargo run -- --compact config seal`: passed on the real local config, `encrypted_fields=2`
 - `cargo run -- --compact doctor`: passed, returns `ok=true` with local readiness summary
+- `cargo run -- --config <temp>/config.toml config set-auth-key --profile sample --stdin` on a TTY: now prompts with a hidden-input AUTH_KEY message and succeeds
+- `printf '%s' 'PIPE_SECRET_123' | cargo run -- --config <temp>/config.toml --compact config set-auth-key --profile real --stdin`: passed
 - `cargo run -- --env real --compact stock stk-bydd-trd --bas-dd 20260312 --limit 1 --sort-by market_cap --order desc --select name,symbol,market_cap`: passed after sealing the real local config
 - `cargo run -- --compact --env real stock stk-bydd-trd --bas-dd 20260312 --sort-by MKTCAP --order desc --limit 10 --select ISU_NM,ISU_CD,MKTCAP`: passed
 - `cargo run -- --compact --format xml --env real stock stk-bydd-trd --bas-dd 20260312 --limit 10`: fails as `program_error.category=invalid_input`

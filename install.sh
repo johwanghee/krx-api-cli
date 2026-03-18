@@ -26,7 +26,7 @@ Install krx-api-cli from GitHub Releases.
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/johwanghee/krx-api-cli/main/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/johwanghee/krx-api-cli/main/install.sh | bash -s -- --version v1.0.2
+  curl -fsSL https://raw.githubusercontent.com/johwanghee/krx-api-cli/main/install.sh | bash -s -- --version v1.0.3
 
 Options:
   --version <tag|latest>   Release tag to install. Default: latest
